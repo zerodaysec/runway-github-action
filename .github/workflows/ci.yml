@@ -1,0 +1,65 @@
+name: "CI"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+env:
+  DOCKER_IMAGE_NAME: runway-action:${{github.sha}}
+
+permissions:
+  contents: write
+  issues: write # Used by Release step to update "The automated release is failing" issue
+  pull-requests: write # Used by ShellCheck Action to add comments on PR
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v3
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+            dockerfile: Dockerfile
+    
+      - name: Update Pull Request
+        uses: actions/github-script@v6
+        if: github.event_name == 'pull_request'
+        with:
+          script: |
+            const output = `
+            #### Hadolint: \`${{ steps.hadolint.outcome }}\`
+            \`\`\`
+            ${process.env.HADOLINT_RESULTS}
+            \`\`\`
+            `;
+        
+            github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: output
+            })
+
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run ShellCheck
+        uses: reviewdog/action-shellcheck@v1.16.0
+        with:
+          reporter: github-pr-review
+          fail_on_error: true
+
+  build-test:
+    name: Build and Test
+    runs-on: ubuntu-20.04
+    # needs: [ "shellcheck" ]
+    needs: [ "lint", "shellcheck" ]
+    steps:
+      - uses: actions/checkout@v3
+      - name: Build Docker image
+        run: docker build -t $DOCKER_IMAGE_NAME .
